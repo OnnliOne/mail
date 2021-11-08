@@ -2,7 +2,9 @@ const Boom = require('@hapi/boom');
 const Stripe = require('stripe');
 const isSANB = require('is-string-and-not-blank');
 
+const config = require('../../config');
 const env = require('../../../../config/env');
+const { Payments, Users } = require('../../../models');
 
 const stripe = new Stripe(env.STRIPE_SECRET_KEY);
 
@@ -26,7 +28,10 @@ async function webhook(ctx) {
       throw Boom.badRequest(ctx.translateError('INVALID_STRIPE_SIGNATURE'));
 
     // handle the event
-    // switch(event.type)
+    const errors = [];
+    if (event.type === 'invoice.payment_succeeded') {
+      await onInvoicePaymentSucceededEvent(event, errors);
+    }
 
     // NOTE: for now we just manually email admins of every event
     //       (and manual edits can be made as needed)
@@ -55,6 +60,35 @@ async function webhook(ctx) {
     */
   } catch (err) {
     ctx.throw(err);
+  }
+}
+
+async function onInvoicePaymentSucceededEvent(event, errors) {
+  const invoice = event.data.object;
+
+  // only deal with subscription invoices
+  if (isSANB(invoice.subscription)) {
+    // get user based on subscription id
+    const user = await Users.findOne({
+      [config.userFields.stripeSubscriptionID]: invoice.subscription
+    })
+      .lean()
+      .exec();
+
+    if (!user) {
+      errors.push(new Error('Invoice is for unknown subscription.'));
+      return;
+    }
+
+    const payment = await Payments.findOne({ stripe_invoice_id: invoice.id })
+      .lean()
+      .exec();
+
+    if (payment) {
+      // no need to do anything this has already been documented
+    }
+
+    // TODO make payment
   }
 }
 
